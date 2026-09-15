@@ -981,18 +981,23 @@ fn live_handoff_preserves_pane_process_io() {
     ));
     wait_for_output(&api_socket, &pane_id, "got:before_replay");
 
+    let shutdown_reader = thread::spawn(move || {
+        wait_for_message_variant(
+            &mut client_stream,
+            Duration::from_secs(5),
+            SERVER_MESSAGE_SERVER_SHUTDOWN,
+        )
+    });
     assert_ok(request(
         &api_socket,
         serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
     drop(spawned);
     assert!(
-        wait_for_message_variant(
-            &mut client_stream,
-            Duration::from_secs(5),
-            SERVER_MESSAGE_SERVER_SHUTDOWN,
-        )
-        .unwrap(),
+        shutdown_reader
+            .join()
+            .expect("shutdown reader should not panic")
+            .unwrap(),
         "connected client shell should receive live-handoff shutdown"
     );
     thread::sleep(Duration::from_millis(300));
@@ -1359,7 +1364,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\nexec /bin/sleep 30\n",
+            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\nexec python3 -c 'import time; time.sleep(30)'\n",
             started_marker.display()
         ),
     )

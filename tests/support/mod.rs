@@ -444,9 +444,14 @@ pub fn wait_for_message_variants(
     timeout: Duration,
     variants: &[u32],
 ) -> Result<bool, String> {
-    stream
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .map_err(|e| e.to_string())?;
+    let read_timeout = Some(Duration::from_millis(200));
+    // macOS rejects resetting the timeout after peer closure even when buffered
+    // shutdown frames remain readable. Preserve an already configured timeout.
+    if stream.read_timeout().map_err(|e| e.to_string())? != read_timeout {
+        stream
+            .set_read_timeout(read_timeout)
+            .map_err(|e| e.to_string())?;
+    }
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         match read_server_message(stream) {
@@ -456,6 +461,27 @@ pub fn wait_for_message_variants(
         }
     }
     Ok(false)
+}
+
+#[test]
+fn wait_for_message_variant_reads_buffered_shutdown_after_peer_close_with_existing_timeout() {
+    let (mut reader, mut writer) = UnixStream::pair().unwrap();
+    let read_timeout = Duration::from_millis(200);
+    reader.set_read_timeout(Some(read_timeout)).unwrap();
+    writer
+        .write_all(&frame_message(&encode_varint_u32(
+            SERVER_MESSAGE_SERVER_SHUTDOWN,
+        )))
+        .unwrap();
+    drop(writer);
+
+    assert_eq!(reader.read_timeout().unwrap(), Some(read_timeout));
+    assert!(wait_for_message_variant(
+        &mut reader,
+        Duration::from_secs(1),
+        SERVER_MESSAGE_SERVER_SHUTDOWN,
+    )
+    .unwrap());
 }
 
 pub fn wait_for_client_shell_bootstrap(
